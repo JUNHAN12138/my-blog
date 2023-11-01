@@ -1,0 +1,208 @@
+# fetch可读流
+
+## 代码示例
+
+```tsx
+export default function useReadableStreams(props){
+    async function main() {
+      // 使用转换器创建转换流
+      const ts = new TransformStream(new Uint8ArrayToStringsTransformer())
+      // 获取文本文件
+      const response = await fetch('goethe-faust-1.txt',{
+        method:'',
+        body:JSON.stringfy({data:data}),
+        headers:{"X-XSRF-TOKEN":"...."},
+        mode:"cors",//跨域
+        cache:"default",
+        credentials:'include'
+      })
+      // Get a ReadableStream on the text file's body\
+      // response?._bodyBlob?.stream();兼容移动端钉钉请求数据结构
+      const rs = response.body;
+      // 在ReadableStream上应用Transformer以创建字符串流
+      const lineStream = rs.pipeThrough(ts)
+      // 读取字符串流
+      const reader = lineStream.getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) {
+          break
+        }
+
+        // 将文档中的每个字符串行作为段落
+        const p = document.createElement('p')
+        p.textContent = value
+        document.getElementById('section').appendChild(p)
+      }
+    }
+
+    main().catch(() => {
+      if (typeof TransformStream === 'undefined') {
+        const error = document.createElement('p')
+        error.textContent = 'TransformStream is not available in your browser. Activate it in Chrome with chrome://flags/#enable-experimental-web-platform-features'
+        error.style.color = 'red'
+        document.getElementById('section').appendChild(error)
+      }
+    }) 
+}
+```
+
+在添加此插件的index.html上添加上` <meta charset="UTF-8">`
+
+```tsx
+/**
+ * 此转换器从“fetch”获取二进制Uint8Array块`
+ * 并将它们转换为字符串块。
+ *
+ * @implements {TransformStreamTransformer}
+ */
+class Uint8ArrayToStringsTransformer {
+  constructor() {
+    this.decoder = new TextDecoder()
+    this.lastString = ''
+  }
+
+  /**
+   * 从“fetch”中接收下一个Uint8Array块并对其进行转换。
+   *
+   * @param｛Uint8Array｝chunk下一个二进制数据块。
+   * @param｛TransformStreamDefaultController｝controller要将变换块排入队列的控制器。
+   */
+  transform(chunk, controller) {
+    console.log('Received chunk %o with %d bytes.', chunk, chunk.byteLength)
+
+    // 将当前块解码为字符串，并在最后一个字符串前加上前缀
+    const string = `${this.lastString}${this.decoder.decode(chunk)}`
+
+    // 从块中提取行
+    const lines = string.split(/\r\n|[\r\n]/g)
+
+    // 保存最后一行，因为它可能不完整
+    this.lastString = lines.pop() || ''
+
+    // 将下一块中的每一行排队
+    for (const line of lines) {
+      controller.enqueue(line)
+    }
+  }
+
+  /**
+   * 当“fetch”已完成对此转换流的写入时调用。
+   *
+   * @param｛TransformStreamDefaultController｝controller要将变换块排入队列的控制器。
+   */
+  flush(controller) {
+    // 还有一条线吗？将其排队
+    if (this.lastString) {
+      controller.enqueue(this.lastString)
+    }
+  }
+}
+```
+
+## tips
+
+### TextDecoder
+
+`TextDecoder` 接口表示一个文本解码器，一个解码器只支持一种特定文本编码，例如 `UTF-8` 、`ISO-8859-2` 、`KOI8-R` 、`GBK` ，等等，解码器将字节流作为输入，并提供码位流作为输出。
+
+*`TextDecoder` 接口不继承任何方法*。返回以字符串，其中包含使用特定 `TextDecoder`对象的方法解码的文本。
+
+```ts
+//处理utf-8文本
+let utf8decoder = new TextDecoder(); // default 'utf-8' or 'utf8'
+
+let u8arr = new Uint8Array([240, 160, 174, 183]);
+let i8arr = new Int8Array([-16, -96, -82, -73]);
+let u16arr = new Uint16Array([41200, 47022]);
+let i16arr = new Int16Array([-24336, -18514]);
+let i32arr = new Int32Array([-1213292304]);
+
+console.log(utf8decoder.decode(u8arr));
+console.log(utf8decoder.decode(i8arr));
+console.log(utf8decoder.decode(u16arr));
+console.log(utf8decoder.decode(i16arr));
+console.log(utf8decoder.decode(i32arr));
+```
+
+```ts
+//处理非UTF-8文本，
+//在此示例中，我们对俄语文本“Привет，мир！”进行编码，它的意思是（"Hello, world."）。在我们的 TextDecoder() 构造函数中，我们指定适用于西里尔字母的 Windows-1251 字符编码。
+const win1251decoder = new TextDecoder("windows-1251");
+const bytes = new Uint8Array([
+  207, 240, 232, 226, 229, 242, 44, 32, 236, 232, 240, 33,
+]);
+console.log(win1251decoder.decode(bytes)); // Привет, мир!
+```
+
+> 解析Uint8Array的字符集时可以使用 `textDecoder("")`方法定义常量，然后decode（字符集）即可
+
+
+
+# WebSocket长连接
+
+## 代码示例
+
+```tsx
+import React, { useRef, useMemo } from 'react';
+import { useWebSocket } from 'ahooks';
+
+enum ReadyState {
+  Connecting = 0,
+  Open = 1,
+  Closing = 2,
+  Closed = 3,
+}
+
+export default () => {
+  const messageHistory = useRef<any[]>([]);
+
+  const { readyState, sendMessage, latestMessage, disconnect, connect } = useWebSocket(
+    'wss://demo.piesocket.com/v3/channel_1?api_key=VCXCEuvhGcBDP7XhiJJUDvR1e1D3eiVjgZ9VRiaV&notify_self',
+  );
+
+  messageHistory.current = useMemo(
+    () => messageHistory.current.concat(latestMessage),
+    [latestMessage],
+  );
+
+  return (
+    <div>
+      {/* send message */}
+      <button
+        onClick={() => sendMessage && sendMessage(`${Date.now()}`)}
+        disabled={readyState !== ReadyState.Open}
+        style={{ marginRight: 8 }}
+      >
+        ✉️ send
+      </button>
+      {/* disconnect */}
+      <button
+        onClick={() => disconnect && disconnect()}
+        disabled={readyState !== ReadyState.Open}
+        style={{ marginRight: 8 }}
+      >
+        ❌ disconnect
+      </button>
+      {/* connect */}
+      <button onClick={() => connect && connect()} disabled={readyState === ReadyState.Open}>
+        {readyState === ReadyState.Connecting ? 'connecting' : '📞 connect'}
+      </button>
+      <div style={{ marginTop: 8 }}>readyState: {readyState}</div>
+      <div style={{ marginTop: 8 }}>
+        <p>received message: </p>
+        {messageHistory.current.map((message, index) => (
+          <p key={index} style={{ wordWrap: 'break-word' }}>
+            {message?.data}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+};
+```
+
+使用useRef存储大量长连接数据，可以减少渲染
+
+
+
